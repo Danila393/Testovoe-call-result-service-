@@ -1,0 +1,2 @@
+# Dependencies of the standalone producer.py (run from the host).
+aio-pika>=9.4,<11

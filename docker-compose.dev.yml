@@ -1,0 +1,6 @@
+# Development overlay: publishes MongoDB on the host for running tests locally.
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --wait mongodb rabbitmq
+services:
+  mongodb:
+    ports:
+      - "27017:27017"
