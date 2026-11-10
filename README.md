@@ -212,8 +212,9 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --wait mong
 
 ## Как проверялось
 
-- `ruff`, `mypy --strict` и 80 тестов - зелёные на Python 3.13 и 3.10 (Linux),
-  против настоящих MongoDB 8.3 и RabbitMQ 3.12;
+- `ruff`, `mypy --strict` и 80 тестов - зелёные на Python 3.10, 3.12 и 3.13,
+  против настоящих MongoDB (7.0 в CI, 8.3 локально) и RabbitMQ (4.1 в CI, 3.12
+  локально);
 - сценарий проверяющего: приложение запущено командой из `Dockerfile`
   (`uvicorn app.main:build_default_app --factory`) на Python 3.12 из чистого
   окружения с `requirements.txt`; `scripts/smoke_check.py` из отдельного окружения
@@ -224,20 +225,17 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --wait mong
 - отказы: остановка MongoDB на 12 с во время обработки (сообщение дождалось БД и
   записалось, в DLQ не попало), перезапуск RabbitMQ (консьюмер переподключился),
   `SIGTERM` (корректная остановка);
-- `ci.yml` проверен `actionlint`.
+- `ci.yml` проверен `actionlint`;
+- GitHub Actions: все 6 джоб зелёные, в том числе `docker compose up --build --wait`
+  со сценарием проверяющего и тесты на Windows через `tasks.ps1` (PowerShell 5.1 и 7).
 
 ## Ограничения
 
-- **`docker compose up --build` в среде разработки не запускался**: Docker Hub
-  был недоступен по сетевой политике, базовые образы скачать не удалось.
-  `docker-compose.yml` проверен `docker compose config`; сборку образа и
-  healthcheck'и контейнеров проверяет job `docker-e2e` в CI после первого push.
-- Windows-часть (`tasks.ps1`, тесты на Windows) локально не запускалась - её
-  проверяет job `test-windows` в CI после первого push.
-- Локальные версии отличаются от образов: MongoDB 8.3 вместо 7.0 и RabbitMQ 3.12
-  вместо 4.1. Используемые возможности (quorum queues, `x-delivery-limit`, DLX,
-  `$facet`) есть в обеих; точное число попыток до DLQ может отличаться на 1 -
-  тест это учитывает.
+- Точное число попыток до DLQ отличается на 1 между RabbitMQ 3.x и 4.x
+  (семантика `x-delivery-limit`); тест принимает оба варианта.
+- Интеграционные тесты на Windows не запускаются в CI: Windows-раннеры GitHub не
+  поддерживают Linux-контейнеры. Код под Windows проверяют юнит-тесты, линтер и
+  типы; сервис в любом случае работает в Linux-контейнере.
 - Учётные данные `guest/guest` и MongoDB без аутентификации - только для
   локального запуска. Для продакшена - секреты через окружение и TLS.
 - Внутри одной реплики сообщения обрабатываются последовательно; масштабирование -
