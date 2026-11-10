@@ -1,0 +1,9 @@
+# Normalise line endings: LF in the repository and in Linux containers,
+# regardless of the contributor's OS (core.autocrlf on Windows).
+* text=auto eol=lf
+
+# Windows-only scripts keep CRLF so Windows PowerShell 5.1 is happy with them.
+*.ps1 text eol=crlf
+
+*.png binary
+*.jpg binary

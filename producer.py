@@ -12,6 +12,7 @@ treats re-sent identical calls as already stored.
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import os
 import sys
@@ -96,11 +97,19 @@ async def publish(url: str, messages: list[dict[str, Any]]) -> int:
             )
             # mandatory=True: an unroutable message raises instead of being silently dropped.
             await exchange.publish(message, routing_key=ROUTING_KEY, mandatory=True)
-            print(f"published {body['call_id']} → {body['campaign_id']}")
+            print(f"published {body['call_id']} -> {body['campaign_id']}")
     return len(messages)
 
 
+def _make_console_safe() -> None:
+    """Never crash on output encoding (e.g. a localized OS error on a legacy Windows code page)."""
+    for stream in (sys.stdout, sys.stderr):
+        if isinstance(stream, io.TextIOWrapper):
+            stream.reconfigure(errors="backslashreplace")
+
+
 def main() -> int:
+    _make_console_safe()
     url = os.environ.get("RABBITMQ_URL", DEFAULT_URL)
     try:
         count = asyncio.run(publish(url, MESSAGES))

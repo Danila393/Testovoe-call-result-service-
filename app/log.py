@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import logging
 import sys
@@ -35,7 +36,13 @@ class JsonFormatter(logging.Formatter):
 
 
 def configure_logging(level: str) -> None:
-    """Route root logging to stdout as JSON. Idempotent."""
+    """Route root logging to stdout as JSON. Idempotent.
+
+    Messages keep non-ASCII text readable (``ensure_ascii=False``); a console that cannot encode
+    a character (legacy Windows code pages) gets an escape instead of a logging error.
+    """
+    if isinstance(sys.stdout, io.TextIOWrapper):
+        sys.stdout.reconfigure(errors="backslashreplace")
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(JsonFormatter())
     root = logging.getLogger()
