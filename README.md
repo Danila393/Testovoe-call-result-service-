@@ -13,37 +13,44 @@ MongoDB 8.0, RabbitMQ 4.1, Docker Compose.
 
 ## Быстрый старт
 
+Работает одинаково на Linux, macOS и Windows: сервис и базы живут в Linux-контейнерах
+(на Windows/macOS - Docker Desktop), с хоста нужен только Python 3.10+ для продюсера.
+Ниже команды для bash и для PowerShell.
+
 ### 1. Запустить окружение
 
 ```bash
 docker compose up --build
 ```
 
-Поднимаются `mongodb`, `rabbitmq` и `app`. Сервис готов, когда
-`docker compose ps` показывает `app` в состоянии `healthy`, или:
-
-```bash
-curl http://localhost:8000/health
-# {"status":"ok","mongodb":{"ok":true,"state":"up"},"consumer":{"ok":true,"state":"consuming"}}
-```
-
-Порты на хосте: `8000` - API (Swagger: http://localhost:8000/docs),
-`5672` - AMQP, `15672` - веб-интерфейс RabbitMQ (guest/guest).
+Поднимаются `mongodb`, `rabbitmq` и `app`. Сервис готов, когда `docker compose ps`
+показывает `app` в состоянии `healthy`. Порты на хосте: `8000` - API (Swagger:
+http://localhost:8000/docs), `5672` - AMQP, `15672` - веб-интерфейс RabbitMQ
+(guest/guest).
 
 ### 2. Запустить продюсер
 
-С хоста (нужен Python 3.10+ и одна зависимость):
+Нужен Python 3.10+ и одна зависимость. Linux/macOS:
 
 ```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements-producer.txt
+python producer.py
+```
+
+Windows (PowerShell):
+
+```powershell
+py -m venv .venv; .\.venv\Scripts\Activate.ps1
 pip install -r requirements-producer.txt
 python producer.py
 ```
 
 ```
-published call_0001 → camp_001
-published call_0002 → camp_001
-published call_0003 → camp_002
-published call_0004 → camp_002
+published call_0001 -> camp_001
+published call_0002 -> camp_001
+published call_0003 -> camp_002
+published call_0004 -> camp_002
 done: 4 messages confirmed by RabbitMQ
 ```
 
@@ -52,16 +59,17 @@ done: 4 messages confirmed by RabbitMQ
 (по умолчанию `amqp://guest:guest@localhost:5672/`). Повторный запуск безопасен:
 идентификаторы звонков фиксированные, дубли не создаются.
 
-Без установки пакетов на хост:
-
-```bash
-docker compose run --rm producer
-```
+Без Python на хосте: `docker compose run --rm producer`.
 
 ### 3. Проверить результат
 
 ```bash
 curl http://localhost:8000/campaigns/camp_001/calls
+```
+
+```powershell
+Invoke-RestMethod http://localhost:8000/campaigns/camp_001/calls | ConvertTo-Json -Depth 5
+# или curl.exe (в Windows PowerShell 5.1 `curl` - псевдоним Invoke-WebRequest)
 ```
 
 ```json
@@ -77,12 +85,24 @@ curl http://localhost:8000/campaigns/camp_001/calls
 }
 ```
 
-Несуществующая кампания:
+Несуществующая кампания → `200 {"detail":"Кампания не найдена"}`.
+
+### Всё одной командой
+
+Сценарий проверяющего целиком - поднять стек, дождаться готовности, запустить
+`producer.py` (дважды), проверить ответы API:
 
 ```bash
-curl http://localhost:8000/campaigns/camp_999/calls
-# 200 {"detail":"Кампания не найдена"}
+make smoke            # Linux/macOS
 ```
+
+```powershell
+.\tasks.ps1 smoke     # Windows
+```
+
+Проверка написана один раз на Python (`scripts/smoke_check.py`, только стандартная
+библиотека + `producer.py`), Makefile и `tasks.ps1` лишь вызывают её. Код выхода
+`0` - сценарий прошёл.
 
 ## API
 
@@ -143,14 +163,23 @@ Exchange `calls` (direct), routing key `call.result`, очередь `calls.resu
 
 ## Разработка
 
-```bash
-uv venv && uv pip install -e . ruff mypy pytest pytest-asyncio httpx
-# или: python -m venv .venv && .venv/bin/pip install -e . ruff mypy pytest pytest-asyncio httpx
+Одни и те же задачи на обеих платформах:
 
-ruff format --check . && ruff check .
-mypy                     # strict
-pytest                   # unit + integration + e2e
-```
+| задача | Linux/macOS | Windows (PowerShell) |
+|---|---|---|
+| создать окружение | `make venv` → `source .venv/bin/activate` | `.\tasks.ps1 venv` → `.\.venv\Scripts\Activate.ps1` |
+| зависимости | `make install` | `.\tasks.ps1 install` |
+| линтер, формат | `make lint` / `make fmt` | `.\tasks.ps1 lint` / `fmt` |
+| типы (`mypy --strict`) | `make typecheck` | `.\tasks.ps1 typecheck` |
+| тесты | `make test` | `.\tasks.ps1 test` |
+| всё, что гоняет CI | `make check` | `.\tasks.ps1 check` |
+| стек / логи / стоп | `make up` / `logs` / `down` | `.\tasks.ps1 up` / `logs` / `down` |
+| сценарий проверки | `make smoke` | `.\tasks.ps1 smoke` |
+
+`make help` / `.\tasks.ps1 help` - список задач. Если PowerShell блокирует скрипты:
+`Set-ExecutionPolicy -Scope Process Bypass`. Зависимости разработки -
+`requirements-dev.txt` (lock `requirements.txt` + инструменты); lock кроссплатформенный
+(`uv pip compile --universal`), платформенные пакеты (`uvloop`) помечены маркерами.
 
 Интеграционные и e2e-тесты используют настоящие MongoDB и RabbitMQ по адресам
 `MONGODB_URL` / `RABBITMQ_URL` (по умолчанию localhost). Поднять их из compose
@@ -158,39 +187,53 @@ pytest                   # unit + integration + e2e
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --wait mongodb rabbitmq
-pytest -rs
 ```
 
-Если сервис недоступен, зависящие от него тесты пропускаются с указанием причины. Тесты используют отдельные
-базы `test_calls_*` и удаляют их, но очищают очереди `calls.results*` - не
-запускайте их против брокера с нужными данными.
+Если сервис недоступен, зависящие от него тесты пропускаются с указанием причины.
+Тесты используют отдельные базы `test_calls_*` и удаляют их, но очищают очереди
+`calls.results*` - не запускайте их против брокера с нужными данными.
 
 Покрыто тестами: валидация сообщений, решения ack/reject/nack, идемпотентность и
 гонки upsert'ов на реальной MongoDB, перенос невалидных сообщений в DLQ,
 удержание сообщения при недоступной БД, DLQ после лимита доставок, переподключение
-к RabbitMQ, корректная остановка, API и сценарий проверяющего целиком.
+к RabbitMQ, корректная остановка, вывод в консоль с устаревшей кодировкой
+(cp1251), API и сценарий проверяющего целиком.
+
+### CI
+
+`.github/workflows/ci.yml` на каждый push и pull request:
+
+| job | что делает |
+|---|---|
+| Lint & types | `ruff`, `mypy --strict` |
+| Tests · Linux · 3.10 / 3.12 | все тесты против MongoDB и RabbitMQ в service-контейнерах; пропуск хотя бы одного теста - ошибка |
+| Tests · Windows · 3.10 / 3.12 | `tasks.ps1` в Windows PowerShell 5.1 и PowerShell 7, `.\tasks.ps1 check`, поведение `producer.py` без брокера. Интеграционные тесты здесь пропускаются: Windows-раннеры GitHub не запускают Linux-контейнеры |
+| docker compose up + reviewer scenario | `docker compose up --build --wait`, затем `scripts/smoke_check.py` |
 
 ## Как проверялось
 
-- `ruff`, `mypy --strict` и 77 тестов - зелёные на Python 3.13 и на Python 3.10
-  (с aio-pika 9.x, которую pip выбирает для 3.10);
-- против настоящих MongoDB 8.3 и RabbitMQ 3.12;
-- сценарий проверяющего вручную: приложение запущено командой из `Dockerfile`
+- `ruff`, `mypy --strict` и 80 тестов - зелёные на Python 3.13 и 3.10 (Linux),
+  против настоящих MongoDB 8.3 и RabbitMQ 3.12;
+- сценарий проверяющего: приложение запущено командой из `Dockerfile`
   (`uvicorn app.main:build_default_app --factory`) на Python 3.12 из чистого
-  окружения с закреплёнными `requirements.txt`, затем `python producer.py` из отдельного окружения с
-  `requirements-producer.txt`, затем `GET /campaigns/camp_001/calls` → ровно 2
-  звонка; повторный запуск продюсера - по-прежнему 2;
+  окружения с `requirements.txt`; `scripts/smoke_check.py` из отдельного окружения
+  с одним `requirements-producer.txt` - все шаги `ok`; при остановленном сервисе -
+  `FAIL` и код выхода 1;
+- `requirements.txt` ставится на Python 3.10 и 3.12 и разрешается для Windows;
+  в PyCharm на Windows ошибка установки `uvloop` воспроизведена и исправлена;
 - отказы: остановка MongoDB на 12 с во время обработки (сообщение дождалось БД и
   записалось, в DLQ не попало), перезапуск RabbitMQ (консьюмер переподключился),
-  `SIGTERM` (корректная остановка).
+  `SIGTERM` (корректная остановка);
+- `ci.yml` проверен `actionlint`.
 
 ## Ограничения
 
 - **`docker compose up --build` в среде разработки не запускался**: Docker Hub
   был недоступен по сетевой политике, базовые образы скачать не удалось.
-  `docker-compose.yml` проверен `docker compose config`, всё остальное - как
-  описано в разделе выше, но без контейнеров. Сборку образа и healthcheck'и
-  контейнеров стоит прогнать при первом запуске.
+  `docker-compose.yml` проверен `docker compose config`; сборку образа и
+  healthcheck'и контейнеров проверяет job `docker-e2e` в CI после первого push.
+- Windows-часть (`tasks.ps1`, тесты на Windows) локально не запускалась - её
+  проверяет job `test-windows` в CI после первого push.
 - Локальные версии отличаются от образов: MongoDB 8.3 вместо 8.0 и RabbitMQ 3.12
   вместо 4.1. Используемые возможности (quorum queues, `x-delivery-limit`, DLX,
   `$facet`) есть в обеих; точное число попыток до DLQ может отличаться на 1 -
@@ -199,6 +242,6 @@ pytest -rs
   локального запуска. Для продакшена - секреты через окружение и TLS.
 - Внутри одной реплики сообщения обрабатываются последовательно; масштабирование -
   репликами `app`.
-- Нет CI-конфигурации, метрик (Prometheus) и трассировки.
+- Нет метрик (Prometheus) и трассировки.
 - Сообщения из `calls.results.dead` автоматически не переобрабатываются - их
   разбирают вручную (веб-интерфейс RabbitMQ, shovel).

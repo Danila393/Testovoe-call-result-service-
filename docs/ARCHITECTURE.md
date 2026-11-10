@@ -47,6 +47,10 @@ app/
   consumer.py      CallConsumer: подключение, переподключение, ack/reject/nack
   api.py           HTTP-роуты
 producer.py        отдельный скрипт-продюсер (самодостаточный, без импорта app)
+scripts/
+  smoke_check.py   сценарий проверяющего против запущенного стека (любая ОС)
+Makefile, tasks.ps1  одинаковые задачи для bash и PowerShell (ADR-016)
+.github/workflows/ci.yml  Linux + Windows + docker compose e2e
 tests/
   unit/            без внешних сервисов (in-memory двойники хранилища)
   integration/     реальные MongoDB и RabbitMQ (адреса из переменных окружения)
