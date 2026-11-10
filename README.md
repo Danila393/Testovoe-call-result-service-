@@ -5,7 +5,7 @@
 внутри FastAPI-приложения.
 
 Стек: Python 3.12 (совместим с 3.10+), FastAPI, PyMongo async, aio-pika,
-MongoDB 8.0, RabbitMQ 4.1, Docker Compose.
+MongoDB 7.0, RabbitMQ 4.1, Docker Compose.
 
 Подробности: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - компоненты, схема БД,
 конечные автоматы, конкурентность; [docs/DECISIONS.md](docs/DECISIONS.md) - принятые
@@ -234,7 +234,7 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --wait mong
   healthcheck'и контейнеров проверяет job `docker-e2e` в CI после первого push.
 - Windows-часть (`tasks.ps1`, тесты на Windows) локально не запускалась - её
   проверяет job `test-windows` в CI после первого push.
-- Локальные версии отличаются от образов: MongoDB 8.3 вместо 8.0 и RabbitMQ 3.12
+- Локальные версии отличаются от образов: MongoDB 8.3 вместо 7.0 и RabbitMQ 3.12
   вместо 4.1. Используемые возможности (quorum queues, `x-delivery-limit`, DLX,
   `$facet`) есть в обеих; точное число попыток до DLQ может отличаться на 1 -
   тест это учитывает.

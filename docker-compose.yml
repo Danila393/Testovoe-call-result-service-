@@ -2,7 +2,7 @@ name: call-results
 
 services:
   mongodb:
-    image: mongo:8.0
+    image: mongo:7.0
     restart: unless-stopped
     volumes:
       - mongo-data:/data/db
