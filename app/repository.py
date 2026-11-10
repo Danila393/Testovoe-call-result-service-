@@ -7,7 +7,6 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from pymongo import ASCENDING
 from pymongo.asynchronous.collection import AsyncCollection
 from pymongo.asynchronous.database import AsyncDatabase
 from pymongo.errors import (
@@ -59,6 +58,12 @@ class InsertCallResult:
     existing: Call | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class CallPage:
+    calls: list[Call]
+    total: int
+
+
 class CampaignStore(Protocol):
     """Implementations raise ``StorageUnavailableError`` for transient failures."""
 
@@ -73,11 +78,8 @@ class CallStore(Protocol):
 
     async def insert(self, call: Call) -> InsertCallResult: ...
 
-    async def list_by_campaign(
-        self, campaign_id: str, *, limit: int, offset: int
-    ) -> list[Call]: ...
-
-    async def count_by_campaign(self, campaign_id: str) -> int: ...
+    async def page_by_campaign(self, campaign_id: str, *, limit: int, offset: int) -> CallPage:
+        """One page of a campaign's calls and their total, read in a single query."""
 
 
 def _campaign_from_doc(doc: Document) -> Campaign:
@@ -152,16 +154,27 @@ class MongoCallStore:
                 return InsertCallResult(inserted=False, existing=_call_from_doc(doc))
         return InsertCallResult(inserted=True)
 
-    async def list_by_campaign(self, campaign_id: str, *, limit: int, offset: int) -> list[Call]:
-        cursor = (
-            self._col.find({"campaign_id": campaign_id}, _CALL_PROJECTION)
-            .sort([("created_at", ASCENDING), ("call_id", ASCENDING)])
-            .skip(offset)
-            .limit(limit)
-        )
+    async def page_by_campaign(self, campaign_id: str, *, limit: int, offset: int) -> CallPage:
+        # $facet computes the page and the total in one aggregate, so they cannot disagree
+        # because of a write landing between two separate queries.
+        pipeline: list[Document] = [
+            {"$match": {"campaign_id": campaign_id}},
+            # Sorting before $facet lets $match+$sort use the campaign_created_call index.
+            {"$sort": {"created_at": 1, "call_id": 1}},
+            {
+                "$facet": {
+                    "calls": [
+                        {"$skip": offset},
+                        {"$limit": limit},
+                        {"$project": _CALL_PROJECTION},
+                    ],
+                    "total": [{"$count": "n"}],
+                }
+            },
+        ]
         async with _translate_errors():
-            return [_call_from_doc(doc) async for doc in cursor]
-
-    async def count_by_campaign(self, campaign_id: str) -> int:
-        async with _translate_errors():
-            return await self._col.count_documents({"campaign_id": campaign_id})
+            cursor = await self._col.aggregate(pipeline)
+            result = await cursor.to_list(length=1)
+        facet = result[0]
+        total = facet["total"][0]["n"] if facet["total"] else 0
+        return CallPage(calls=[_call_from_doc(d) for d in facet["calls"]], total=total)

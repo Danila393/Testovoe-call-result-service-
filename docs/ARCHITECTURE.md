@@ -224,7 +224,9 @@ API; консьюмер переподключается в фоне. Состо
 
 - кампания есть → `200`, `CampaignCallsResponse`:
   `{"campaign_id": "...", "total": 2, "limit": 100, "offset": 0, "calls": [...]}`,
-  звонки отсортированы по `created_at`, затем `call_id`;
+  звонки отсортированы по `created_at`, затем `call_id`; страница и `total`
+  считаются одним aggregate-запросом (`$match` → `$sort` по индексу → `$facet`),
+  поэтому не расходятся, если звонок записан между двумя запросами;
 - кампании нет → `200`, `CampaignNotFoundResponse`: `{"detail": "Кампания не найдена"}`;
 - некорректный `campaign_id`, `limit`, `offset` → `422`.
 

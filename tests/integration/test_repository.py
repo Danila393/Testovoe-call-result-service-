@@ -61,10 +61,13 @@ async def test_list_filters_sorts_and_paginates(mongo_db):
     await store.insert(make_call("call_c", minutes=0))
     await store.insert(make_call("call_x", campaign_id="camp_002"))
 
-    page = await store.list_by_campaign("camp_001", limit=10, offset=0)
-    assert [c.call_id for c in page] == ["call_c", "call_a", "call_b"]
-    assert [c.call_id for c in await store.list_by_campaign("camp_001", limit=1, offset=1)] == [
-        "call_a"
-    ]
-    assert await store.count_by_campaign("camp_001") == 3
-    assert await store.count_by_campaign("camp_404") == 0
+    page = await store.page_by_campaign("camp_001", limit=10, offset=0)
+    assert [c.call_id for c in page.calls] == ["call_c", "call_a", "call_b"]
+    assert page.total == 3
+    second = await store.page_by_campaign("camp_001", limit=1, offset=1)
+    assert [c.call_id for c in second.calls] == ["call_a"]
+    assert second.total == 3
+    beyond = await store.page_by_campaign("camp_001", limit=10, offset=50)
+    assert (beyond.calls, beyond.total) == ([], 3)
+    empty = await store.page_by_campaign("camp_404", limit=10, offset=0)
+    assert (empty.calls, empty.total) == ([], 0)

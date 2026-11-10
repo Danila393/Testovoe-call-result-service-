@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from app.models import Call, Campaign
-from app.repository import InsertCallResult
+from app.repository import CallPage, InsertCallResult
 
 
 class InMemoryCampaignStore:
@@ -33,12 +33,9 @@ class InMemoryCallStore:
         self.items[call.call_id] = call
         return InsertCallResult(inserted=True)
 
-    async def list_by_campaign(self, campaign_id: str, *, limit: int, offset: int) -> list[Call]:
+    async def page_by_campaign(self, campaign_id: str, *, limit: int, offset: int) -> CallPage:
         calls = sorted(
             (c for c in self.items.values() if c.campaign_id == campaign_id),
             key=lambda c: (c.created_at, c.call_id),
         )
-        return calls[offset : offset + limit]
-
-    async def count_by_campaign(self, campaign_id: str) -> int:
-        return sum(1 for c in self.items.values() if c.campaign_id == campaign_id)
+        return CallPage(calls=calls[offset : offset + limit], total=len(calls))
