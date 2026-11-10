@@ -15,8 +15,8 @@ import pytest
 from pymongo.asynchronous.database import AsyncDatabase
 
 from app.config import Settings
-from app.db import create_client, ensure_indexes, ping
-from app.repository import Document
+from app.infrastructure.mongo import create_client, ensure_indexes, ping
+from app.repositories.mongo import Document
 
 
 @pytest.fixture

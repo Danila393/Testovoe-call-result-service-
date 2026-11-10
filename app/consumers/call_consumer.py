@@ -1,13 +1,13 @@
 """RabbitMQ consumer running as a background task inside the FastAPI process.
 
-Lifecycle and ack semantics: docs/ARCHITECTURE.md §6-7.
+A transport adapter: it turns deliveries into ``IngestCallCommand`` and settles them
+(ack / reject / nack) by the outcome. Lifecycle and ack semantics: docs/ARCHITECTURE.md §6-7.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
-import enum
 import logging
 from collections.abc import Awaitable, Callable
 from typing import Protocol
@@ -16,25 +16,18 @@ import aio_pika
 from aio_pika.abc import AbstractConnection, AbstractIncomingMessage
 
 from app.config import Settings
-from app.messaging import declare_topology
-from app.repository import StorageUnavailableError
-from app.service import IngestResult
+from app.enums import ConsumerState
+from app.exceptions import StorageUnavailableError
+from app.infrastructure.rabbitmq import declare_topology
+from app.models import IngestCallCommand, IngestResult
 
 logger = logging.getLogger(__name__)
 
 Connector = Callable[[str], Awaitable[AbstractConnection]]
 
 
-class Ingestor(Protocol):
-    async def ingest(self, body: bytes) -> IngestResult: ...
-
-
-class ConsumerState(str, enum.Enum):
-    CREATED = "created"
-    CONNECTING = "connecting"
-    CONSUMING = "consuming"
-    BACKOFF = "backoff"
-    STOPPED = "stopped"
+class IngestCommandHandler(Protocol):
+    async def handle(self, command: IngestCallCommand) -> IngestResult: ...
 
 
 async def _default_connect(url: str) -> AbstractConnection:
@@ -45,11 +38,11 @@ class CallConsumer:
     def __init__(
         self,
         settings: Settings,
-        ingestor: Ingestor,
+        handler: IngestCommandHandler,
         connect: Connector = _default_connect,
     ) -> None:
         self._settings = settings
-        self._ingestor = ingestor
+        self._handler = handler
         self._connect = connect
         self._state = ConsumerState.CREATED
         self._task: asyncio.Task[None] | None = None
@@ -133,7 +126,7 @@ class CallConsumer:
         delay = self._settings.retry_delay_seconds
         while True:
             try:
-                result = await self._ingestor.ingest(message.body)
+                result = await self._handler.handle(IngestCallCommand(message.body))
                 break
             except StorageUnavailableError as exc:
                 # The database is down, not the message is bad: hold the message and retry in
@@ -157,7 +150,7 @@ class CallConsumer:
         if result.outcome.should_ack:
             await message.ack()
         else:
-            # Dead-lettered to calls.results.dead (see app.messaging).
+            # Dead-lettered to calls.results.dead (see app.infrastructure.rabbitmq).
             await message.reject(requeue=False)
         logger.debug(
             "message settled",

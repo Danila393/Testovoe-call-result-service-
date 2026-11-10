@@ -1,11 +1,10 @@
-"""Persistence: storage protocols and their MongoDB implementation."""
+"""MongoDB implementation of the storage protocols in ``app.repositories.protocols``."""
 
 from __future__ import annotations
 
 import contextlib
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Final
 
 from pymongo.asynchronous.collection import AsyncCollection
 from pymongo.asynchronous.database import AsyncDatabase
@@ -17,16 +16,13 @@ from pymongo.errors import (
     WTimeoutError,
 )
 
-from app.models import Call, Campaign
+from app.exceptions import StorageUnavailableError
+from app.models import Call, CallPage, Campaign, InsertCallResult
 
-CAMPAIGNS = "campaigns"
-CALLS = "calls"
+CAMPAIGNS: Final = "campaigns"
+CALLS: Final = "calls"
 
 Document = dict[str, Any]
-
-
-class StorageUnavailableError(Exception):
-    """The database is temporarily unreachable; the same operation may succeed later."""
 
 
 def _is_transient(exc: PyMongoError) -> bool:
@@ -36,7 +32,8 @@ def _is_transient(exc: PyMongoError) -> bool:
 
 
 @contextlib.asynccontextmanager
-async def _translate_errors() -> AsyncIterator[None]:
+async def translate_errors() -> AsyncIterator[None]:
+    """Turn transient PyMongo failures into ``StorageUnavailableError``; let the rest through."""
     try:
         yield
     except DuplicateKeyError:
@@ -45,41 +42,6 @@ async def _translate_errors() -> AsyncIterator[None]:
         if _is_transient(exc):
             raise StorageUnavailableError(str(exc)) from exc
         raise
-
-
-@dataclass(frozen=True, slots=True)
-class InsertCallResult:
-    """Result of inserting a call.
-
-    ``inserted`` is True when the call was written now; otherwise ``existing`` is the stored one.
-    """
-
-    inserted: bool
-    existing: Call | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class CallPage:
-    calls: list[Call]
-    total: int
-
-
-class CampaignStore(Protocol):
-    """Implementations raise ``StorageUnavailableError`` for transient failures."""
-
-    async def ensure(self, campaign: Campaign) -> Campaign:
-        """Create the campaign if absent. Returns the stored campaign (first write wins)."""
-
-    async def get(self, campaign_id: str) -> Campaign | None: ...
-
-
-class CallStore(Protocol):
-    """Implementations raise ``StorageUnavailableError`` for transient failures."""
-
-    async def insert(self, call: Call) -> InsertCallResult: ...
-
-    async def page_by_campaign(self, campaign_id: str, *, limit: int, offset: int) -> CallPage:
-        """One page of a campaign's calls and their total, read in a single query."""
 
 
 def _campaign_from_doc(doc: Document) -> Campaign:
@@ -112,7 +74,7 @@ class MongoCampaignStore:
         self._col: AsyncCollection[Document] = db[CAMPAIGNS]
 
     async def ensure(self, campaign: Campaign) -> Campaign:
-        async with _translate_errors():
+        async with translate_errors():
             # DuplicateKeyError: a concurrent upsert created it between our match and insert,
             # which is exactly the outcome we want.
             with contextlib.suppress(DuplicateKeyError):
@@ -127,7 +89,7 @@ class MongoCampaignStore:
         return stored
 
     async def get(self, campaign_id: str) -> Campaign | None:
-        async with _translate_errors():
+        async with translate_errors():
             doc = await self._col.find_one({"campaign_id": campaign_id}, _CAMPAIGN_PROJECTION)
         return _campaign_from_doc(doc) if doc is not None else None
 
@@ -144,7 +106,7 @@ class MongoCallStore:
             "status": call.status,
             "created_at": call.created_at,
         }
-        async with _translate_errors():
+        async with translate_errors():
             try:
                 await self._col.insert_one(document)
             except DuplicateKeyError:
@@ -172,7 +134,7 @@ class MongoCallStore:
                 }
             },
         ]
-        async with _translate_errors():
+        async with translate_errors():
             cursor = await self._col.aggregate(pipeline)
             result = await cursor.to_list(length=1)
         facet = result[0]

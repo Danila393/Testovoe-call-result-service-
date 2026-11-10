@@ -1,47 +1,30 @@
-"""Business logic of ingesting one call-result message.
+"""Command: ingest one call-result message.
 
-Transport-agnostic: takes raw bytes, returns an outcome. Storage failures are raised to the
-caller, which decides on retry (see docs/ARCHITECTURE.md §6).
+Transport-agnostic: takes the raw body, returns an outcome. Transient storage failures
+(``StorageUnavailableError``) propagate so the transport can retry
+(docs/ARCHITECTURE.md, section 6).
 """
 
 from __future__ import annotations
 
-import enum
 import json
 import logging
-from dataclasses import dataclass
 
 from pydantic import ValidationError
 
-from app.repository import CallStore, CampaignStore
-from app.schemas import CallMessage
+from app.dto import CallMessage
+from app.enums import IngestOutcome
+from app.models import IngestCallCommand, IngestResult
+from app.repositories import CallStore, CampaignStore
 
 logger = logging.getLogger(__name__)
 
 _MAX_LOGGED_BODY = 500
 
 
-class Outcome(enum.Enum):
-    STORED = "stored"
-    DUPLICATE = "duplicate"
-    INVALID = "invalid"
-    CONFLICT = "conflict"
-
-    @property
-    def should_ack(self) -> bool:
-        return self in (Outcome.STORED, Outcome.DUPLICATE)
-
-
-@dataclass(frozen=True, slots=True)
-class IngestResult:
-    outcome: Outcome
-    call_id: str | None = None
-    reason: str | None = None
-
-
 def _preview(body: bytes) -> str:
     text = body[:_MAX_LOGGED_BODY].decode("utf-8", errors="replace")
-    return text + ("…" if len(body) > _MAX_LOGGED_BODY else "")
+    return text + ("..." if len(body) > _MAX_LOGGED_BODY else "")
 
 
 def parse_message(body: bytes) -> CallMessage | str:
@@ -62,18 +45,19 @@ def parse_message(body: bytes) -> CallMessage | str:
         return f"validation failed: {errors}"
 
 
-class CallIngestService:
+class IngestCallHandler:
     def __init__(self, campaigns: CampaignStore, calls: CallStore) -> None:
         self._campaigns = campaigns
         self._calls = calls
 
-    async def ingest(self, body: bytes) -> IngestResult:
-        parsed = parse_message(body)
+    async def handle(self, command: IngestCallCommand) -> IngestResult:
+        parsed = parse_message(command.body)
         if isinstance(parsed, str):
             logger.warning(
-                "invalid message rejected", extra={"reason": parsed, "body": _preview(body)}
+                "invalid message rejected",
+                extra={"reason": parsed, "body": _preview(command.body)},
             )
-            return IngestResult(Outcome.INVALID, reason=parsed)
+            return IngestResult(IngestOutcome.INVALID, reason=parsed)
 
         campaign = parsed.to_campaign()
         stored_campaign = await self._campaigns.ensure(campaign)
@@ -94,11 +78,11 @@ class CallIngestService:
             logger.info(
                 "call stored", extra={"call_id": call.call_id, "campaign_id": call.campaign_id}
             )
-            return IngestResult(Outcome.STORED, call_id=call.call_id)
+            return IngestResult(IngestOutcome.STORED, call_id=call.call_id)
 
         if result.existing == call:
             logger.info("duplicate call skipped", extra={"call_id": call.call_id})
-            return IngestResult(Outcome.DUPLICATE, call_id=call.call_id)
+            return IngestResult(IngestOutcome.DUPLICATE, call_id=call.call_id)
 
         reason = "call_id already stored with different data"
         logger.error(
@@ -110,4 +94,4 @@ class CallIngestService:
                 "incoming": str(call),
             },
         )
-        return IngestResult(Outcome.CONFLICT, call_id=call.call_id, reason=reason)
+        return IngestResult(IngestOutcome.CONFLICT, call_id=call.call_id, reason=reason)

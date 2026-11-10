@@ -6,20 +6,27 @@ import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
 
+import aio_pika
 import httpx
 import pytest
 from fastapi import FastAPI
+from pymongo.asynchronous.database import AsyncDatabase
 
 import producer
 from app.config import Settings
+from app.infrastructure.rabbitmq import DEAD_LETTER_QUEUE, QUEUE, declare_topology
 from app.main import create_app
-from app.messaging import DEAD_LETTER_QUEUE, QUEUE, declare_topology
+from app.repositories.mongo import Document
 
 pytestmark = pytest.mark.integration
 
 
 @pytest.fixture
-async def app_client(settings: Settings, mongo_db, rabbitmq) -> AsyncIterator[httpx.AsyncClient]:
+async def app_client(
+    settings: Settings,
+    mongo_db: AsyncDatabase[Document],
+    rabbitmq: aio_pika.abc.AbstractConnection,
+) -> AsyncIterator[httpx.AsyncClient]:
     channel = await rabbitmq.channel()
     await declare_topology(channel)
     for name in (QUEUE, DEAD_LETTER_QUEUE):
@@ -51,7 +58,7 @@ async def wait_for_calls(client: httpx.AsyncClient, campaign_id: str, n: int) ->
     raise AssertionError(f"expected {n} calls for {campaign_id}, last response: {body}")
 
 
-async def test_reviewer_scenario(app_client, settings):
+async def test_reviewer_scenario(app_client: httpx.AsyncClient, settings: Settings) -> None:
     health = await wait_healthy(app_client)
     assert health == {
         "status": "ok",

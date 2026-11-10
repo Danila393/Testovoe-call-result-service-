@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import json
-from typing import Any
 
 
-def message(**overrides: Any) -> dict[str, Any]:
-    body: dict[str, Any] = {
+def message(**overrides: object) -> dict[str, object]:
+    """A valid queue message; override fields, or drop one with ``field=...``."""
+    body: dict[str, object] = {
         "call_id": "call_0001",
         "campaign_id": "camp_001",
         "campaign_name": "Напоминание о платеже",
@@ -18,5 +18,5 @@ def message(**overrides: Any) -> dict[str, Any]:
     return {k: v for k, v in body.items() if v is not ...}
 
 
-def message_bytes(**overrides: Any) -> bytes:
+def message_bytes(**overrides: object) -> bytes:
     return json.dumps(message(**overrides), ensure_ascii=False).encode()

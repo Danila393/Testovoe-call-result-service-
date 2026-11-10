@@ -8,21 +8,25 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 
 import aio_pika
 import pytest
+from pymongo.asynchronous.database import AsyncDatabase
 
 import producer
 from app.config import Settings
-from app.consumer import CallConsumer, ConsumerState
-from app.messaging import DEAD_LETTER_QUEUE, DELIVERY_LIMIT, QUEUE, declare_topology
-from app.repository import (
-    CALLS,
-    CAMPAIGNS,
-    MongoCallStore,
-    MongoCampaignStore,
-    StorageUnavailableError,
-)
-from app.service import CallIngestService, IngestResult
+from app.consumers import CallConsumer
+from app.consumers.call_consumer import Connector, IngestCommandHandler
+from app.enums import ConsumerState
+from app.exceptions import StorageUnavailableError
+from app.infrastructure.rabbitmq import DEAD_LETTER_QUEUE, DELIVERY_LIMIT, QUEUE, declare_topology
+from app.models import IngestCallCommand, IngestResult
+from app.repositories import MongoCallStore, MongoCampaignStore
+from app.repositories.mongo import CALLS, CAMPAIGNS, Document
+from app.services.commands import IngestCallHandler
 from tests.factories import message
 from tests.fakes import InMemoryCallStore, InMemoryCampaignStore
+
+Channel = aio_pika.abc.AbstractChannel
+Connection = aio_pika.abc.AbstractConnection
+StartConsumer = Callable[..., CallConsumer]
 
 pytestmark = pytest.mark.integration
 
@@ -36,7 +40,7 @@ async def wait_until(predicate: Callable[[], Awaitable[bool]], timeout: float = 
 
 
 @pytest.fixture
-async def broker(rabbitmq) -> AsyncIterator[aio_pika.abc.AbstractChannel]:
+async def broker(rabbitmq: Connection) -> AsyncIterator[Channel]:
     """A channel with the topology declared and both queues purged."""
     channel = await rabbitmq.channel()
     await declare_topology(channel)
@@ -47,7 +51,7 @@ async def broker(rabbitmq) -> AsyncIterator[aio_pika.abc.AbstractChannel]:
         await (await channel.get_queue(name)).purge()
 
 
-async def queue_depth(channel: aio_pika.abc.AbstractChannel, name: str) -> int:
+async def queue_depth(channel: Channel, name: str) -> int:
     declared = await channel.declare_queue(name, passive=True)
     return int(declared.declaration_result.message_count or 0)
 
@@ -65,12 +69,15 @@ async def publish_raw(settings: Settings, *bodies: bytes) -> None:
 
 
 @pytest.fixture
-async def running(settings) -> AsyncIterator[Callable[..., CallConsumer]]:
+async def running(settings: Settings) -> AsyncIterator[StartConsumer]:
     started: list[CallConsumer] = []
 
-    def start(ingestor, connect=None) -> CallConsumer:
-        kwargs = {"connect": connect} if connect else {}
-        consumer = CallConsumer(settings, ingestor, **kwargs)
+    def start(handler: IngestCommandHandler, connect: Connector | None = None) -> CallConsumer:
+        consumer = (
+            CallConsumer(settings, handler, connect)
+            if connect is not None
+            else CallConsumer(settings, handler)
+        )
         consumer.start()
         started.append(consumer)
         return consumer
@@ -80,8 +87,10 @@ async def running(settings) -> AsyncIterator[Callable[..., CallConsumer]]:
         await consumer.stop()
 
 
-async def test_producer_messages_end_up_in_mongo(settings, broker, mongo_db, running):
-    consumer = running(CallIngestService(MongoCampaignStore(mongo_db), MongoCallStore(mongo_db)))
+async def test_producer_messages_end_up_in_mongo(
+    settings: Settings, broker: Channel, mongo_db: AsyncDatabase[Document], running: StartConsumer
+) -> None:
+    consumer = running(IngestCallHandler(MongoCampaignStore(mongo_db), MongoCallStore(mongo_db)))
     assert await producer.publish(settings.rabbitmq_url, producer.MESSAGES) == 4
 
     async def all_stored() -> bool:
@@ -99,13 +108,15 @@ async def test_producer_messages_end_up_in_mongo(settings, broker, mongo_db, run
     assert await mongo_db[CALLS].count_documents({}) == 4
 
 
-async def _is_zero(channel: aio_pika.abc.AbstractChannel, name: str) -> bool:
+async def _is_zero(channel: Channel, name: str) -> bool:
     return await queue_depth(channel, name) == 0
 
 
-async def test_invalid_messages_dead_lettered_and_consumer_keeps_working(settings, broker, running):
+async def test_invalid_messages_dead_lettered_and_consumer_keeps_working(
+    settings: Settings, broker: Channel, running: StartConsumer
+) -> None:
     calls = InMemoryCallStore()
-    consumer = running(CallIngestService(InMemoryCampaignStore(), calls))
+    consumer = running(IngestCallHandler(InMemoryCampaignStore(), calls))
     await publish_raw(
         settings,
         b"not json",
@@ -126,10 +137,12 @@ async def _has(calls: InMemoryCallStore, call_id: str) -> bool:
     return call_id in calls.items
 
 
-async def test_storage_outage_holds_message_until_recovery(settings, broker, running):
+async def test_storage_outage_holds_message_until_recovery(
+    settings: Settings, broker: Channel, running: StartConsumer
+) -> None:
     calls = InMemoryCallStore()
     calls.fail_with = StorageUnavailableError("mongo down")
-    running(CallIngestService(InMemoryCampaignStore(), calls))
+    running(IngestCallHandler(InMemoryCampaignStore(), calls))
     await publish_raw(settings, json.dumps(message()).encode())
 
     # Much longer than delivery-limit x retry delay: an outage must not dead-letter messages.
@@ -143,11 +156,13 @@ async def test_storage_outage_holds_message_until_recovery(settings, broker, run
     assert await queue_depth(broker, DEAD_LETTER_QUEUE) == 0
 
 
-async def test_poison_message_dead_lettered_after_delivery_limit(settings, broker, running):
+async def test_poison_message_dead_lettered_after_delivery_limit(
+    settings: Settings, broker: Channel, running: StartConsumer
+) -> None:
     attempts = 0
 
     class Buggy:
-        async def ingest(self, body: bytes) -> IngestResult:
+        async def handle(self, command: IngestCallCommand) -> IngestResult:
             nonlocal attempts
             attempts += 1
             raise ZeroDivisionError("bug triggered by this message")
@@ -163,16 +178,18 @@ async def test_poison_message_dead_lettered_after_delivery_limit(settings, broke
     assert DELIVERY_LIMIT <= attempts <= DELIVERY_LIMIT + 1
 
 
-async def test_reconnects_after_connection_loss(settings, broker, running):
-    connections: list[aio_pika.abc.AbstractConnection] = []
+async def test_reconnects_after_connection_loss(
+    settings: Settings, broker: Channel, running: StartConsumer
+) -> None:
+    connections: list[Connection] = []
 
-    async def tracking_connect(url: str) -> aio_pika.abc.AbstractConnection:
+    async def tracking_connect(url: str) -> Connection:
         conn = await aio_pika.connect(url)
         connections.append(conn)
         return conn
 
     calls = InMemoryCallStore()
-    consumer = running(CallIngestService(InMemoryCampaignStore(), calls), tracking_connect)
+    consumer = running(IngestCallHandler(InMemoryCampaignStore(), calls), tracking_connect)
 
     async def consuming() -> bool:
         return consumer.state is ConsumerState.CONSUMING
@@ -186,14 +203,16 @@ async def test_reconnects_after_connection_loss(settings, broker, running):
     await wait_until(lambda: _has(calls, "call_0001"))
 
 
-async def _len_at_least(items: list[aio_pika.abc.AbstractConnection], n: int) -> bool:
+async def _len_at_least(items: list[Connection], n: int) -> bool:
     return len(items) >= n
 
 
-async def test_starts_while_broker_unreachable_then_recovers(settings, broker, running):
+async def test_starts_while_broker_unreachable_then_recovers(
+    settings: Settings, broker: Channel, running: StartConsumer
+) -> None:
     failures = 0
 
-    async def flaky_connect(url: str) -> aio_pika.abc.AbstractConnection:
+    async def flaky_connect(url: str) -> Connection:
         nonlocal failures
         if failures < 2:
             failures += 1
@@ -201,7 +220,7 @@ async def test_starts_while_broker_unreachable_then_recovers(settings, broker, r
         return await aio_pika.connect(url)
 
     consumer = running(
-        CallIngestService(InMemoryCampaignStore(), InMemoryCallStore()), flaky_connect
+        IngestCallHandler(InMemoryCampaignStore(), InMemoryCallStore()), flaky_connect
     )
     await asyncio.sleep(0.05)
     assert consumer.state in (ConsumerState.BACKOFF, ConsumerState.CONNECTING)
@@ -213,17 +232,17 @@ async def test_starts_while_broker_unreachable_then_recovers(settings, broker, r
     assert failures == 2
 
 
-async def test_stop_waits_for_message_in_progress(settings, broker):
+async def test_stop_waits_for_message_in_progress(settings: Settings, broker: Channel) -> None:
     release = asyncio.Event()
     entered = asyncio.Event()
     finished: list[str] = []
-    inner = CallIngestService(InMemoryCampaignStore(), InMemoryCallStore())
+    inner = IngestCallHandler(InMemoryCampaignStore(), InMemoryCallStore())
 
     class Slow:
-        async def ingest(self, body: bytes) -> IngestResult:
+        async def handle(self, command: IngestCallCommand) -> IngestResult:
             entered.set()
             await release.wait()
-            result = await inner.ingest(body)
+            result = await inner.handle(command)
             finished.append("done")
             return result
 

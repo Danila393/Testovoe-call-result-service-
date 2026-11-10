@@ -14,14 +14,15 @@ flowchart LR
 
     subgraph APP[FastAPI-приложение, один процесс]
         C[CallConsumer<br/>фоновая asyncio-задача]
-        S[CallIngestService]
-        R[(Repository)]
+        S[IngestCallHandler<br/>команда]
+        RD[CampaignCallsReader,<br/>HealthReader]
+        R[(Repositories)]
         A[REST API<br/>/campaigns/&#123;id&#125;/calls<br/>/health]
     end
 
     Q -- consume, prefetch --> C
     C --> S --> R
-    A --> R
+    A -- Depends --> RD --> R
     R <--> M[(MongoDB<br/>campaigns, calls)]
     U[Клиент] -- HTTP --> A
 ```
@@ -34,31 +35,76 @@ flowchart LR
 
 ```
 app/
-  main.py          create_app(), lifespan: Mongo → индексы → консьюмер → API
-  config.py        Settings (pydantic-settings, переменные окружения)
-  log.py           настройка логирования (JSON-строки в stdout)
-  models.py        доменные сущности Campaign, Call (frozen dataclasses)
-  messaging.py     топология RabbitMQ (имена, аргументы очередей) - единый источник
-  schemas.py       Pydantic-модели: входящее сообщение, ответы API
-  repository.py    протоколы CampaignStore / CallStore и их MongoDB-реализации;
-                   перевод временных ошибок PyMongo в StorageUnavailableError
-  db.py            создание клиента MongoDB и индексов
-  service.py       CallIngestService: бизнес-логика обработки одного сообщения
-  consumer.py      CallConsumer: подключение, переподключение, ack/reject/nack
-  api.py           HTTP-роуты
-producer.py        отдельный скрипт-продюсер (самодостаточный, без импорта app)
-scripts/
-  smoke_check.py   сценарий проверяющего против запущенного стека (любая ОС)
-Makefile, tasks.ps1  одинаковые задачи для bash и PowerShell (ADR-016)
+  main.py               create_app(): lifespan строит Container, регистрирует роуты и обработчики ошибок
+  container.py          composition root: клиенты, репозитории, команды, ридеры, консьюмер
+  config.py             Settings (pydantic-settings: переменные окружения и .env)
+  log.py                логирование JSON-строками в stdout
+  exceptions.py         ошибки приложения: CampaignNotFoundError, StorageUnavailableError,
+                        ServiceNotReadyError
+  models/               датаклассы (без I/O и фреймворков)
+    campaign.py, call.py          доменные сущности
+    storage.py                    InsertCallResult, CallPage: результаты репозиториев
+    ingest.py                     IngestCallCommand, IngestResult
+    pagination.py                 PageParams, лимиты страницы
+  enums/                перечисления, по одному на файл
+    ingest_outcome.py             STORED / DUPLICATE / INVALID / CONFLICT (+ should_ack)
+    consumer_state.py, health_status.py, component_state.py
+  dto/                  Pydantic-схемы
+    fields.py                     переиспользуемые типы полей и шаблоны валидации
+    call_message.py               входящее сообщение очереди
+    calls.py, health.py, errors.py   контракт HTTP
+  repositories/
+    protocols.py                  порты CampaignStore / CallStore
+    mongo.py                      реализация на PyMongo async; временные ошибки
+                                  PyMongo -> StorageUnavailableError
+  services/
+    commands/ingest_call.py       IngestCallHandler: валидация и бизнес-правила записи
+    readers/campaign_calls.py     CampaignCallsReader: звонки кампании или CampaignNotFoundError
+    readers/health.py             HealthReader: отчёт о готовности или ServiceNotReadyError
+  consumers/call_consumer.py      CallConsumer: транспорт RabbitMQ, подключение, ack/reject/nack
+  infrastructure/
+    mongo.py                      клиент MongoDB, индексы, ping
+    rabbitmq.py                   топология (имена, аргументы очередей): единый источник
+  api/
+    dependencies.py               провайдеры Depends: ридеры, campaign_id, пагинация
+    errors.py                     исключения приложения -> HTTP-ответы, в одном месте
+    routes/campaigns.py, routes/health.py   тонкие ручки
+producer.py             отдельный скрипт-продюсер (самодостаточный, без импорта app)
+scripts/smoke_check.py  сценарий проверяющего против запущенного стека (любая ОС)
+Makefile, tasks.ps1     одинаковые задачи для bash и PowerShell (ADR-016)
+.env.example            все настройки с значениями по умолчанию (сверяется тестом)
 .github/workflows/ci.yml  Linux + Windows + docker compose e2e
 tests/
   unit/            без внешних сервисов (in-memory двойники хранилища)
   integration/     реальные MongoDB и RabbitMQ (адреса из переменных окружения)
-  e2e/             приложение целиком (lifespan) + producer.py - сценарий проверки
+  e2e/             приложение целиком (lifespan) + producer.py: сценарий проверки
 ```
 
-Зависимости направлены строго внутрь: `api`/`consumer` → `service` → `repository` →
-`pymongo`. `service` не знает про AMQP, `consumer` не знает про MongoDB.
+Зависимости направлены внутрь:
+
+```mermaid
+flowchart LR
+    routes[api/routes] --> deps[api/dependencies] --> readers[services/readers]
+    errors[api/errors] --> exc[exceptions]
+    consumer[consumers] --> commands[services/commands]
+    readers --> protocols[repositories/protocols]
+    commands --> protocols
+    mongo[repositories/mongo] -.реализует.-> protocols
+    readers --> dto
+    commands --> dto
+    dto --> models
+    protocols --> models
+```
+
+Правила:
+
+- ручка только получает зависимости через `Depends` и возвращает результат ридера;
+  ветвлений и обработки ошибок в ней нет;
+- бизнес-решения принимают команды и ридеры; о проблеме они сообщают исключением из
+  `app/exceptions.py`, а `api/errors.py` переводит его в HTTP-ответ (одно место для
+  всех статусов);
+- `services` не знают про HTTP и AMQP, `consumers` не знают про MongoDB;
+- датаклассы (`models`), перечисления (`enums`) и Pydantic-схемы (`dto`) не содержат I/O.
 
 ## 3. Модель данных (MongoDB)
 

@@ -32,11 +32,14 @@ services:
     build: .
     image: call-results-service:local
     restart: unless-stopped
+    # Optional overrides (cp .env.example .env). The URLs below always win: inside
+    # the compose network the services are reached by their names, not localhost.
+    env_file:
+      - path: .env
+        required: false
     environment:
       MONGODB_URL: mongodb://mongodb:27017
-      MONGODB_DB: call_results
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
-      LOG_LEVEL: INFO
     ports:
       - "8000:8000"
     depends_on:

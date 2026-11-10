@@ -38,18 +38,13 @@ select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "SIM", "RET", "ASYNC", 
 ignore = ["RUF001", "RUF002", "RUF003"]  # Cyrillic text in strings/comments is intentional
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "ANN"]
+"tests/**" = ["S101", "SLF001"]
 
 [tool.mypy]
 python_version = "3.10"
 strict = true
 files = ["app", "producer.py", "scripts", "tests"]
 plugins = ["pydantic.mypy"]
-
-[[tool.mypy.overrides]]
-module = ["tests.*"]
-disallow_untyped_defs = false
-disallow_incomplete_defs = false
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

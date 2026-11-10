@@ -20,8 +20,11 @@ class _KeepOpenBuffer(io.BytesIO):
         pass
 
 
+InstallConsole = Callable[[], Callable[[], bytes]]
+
+
 @pytest.fixture
-def legacy_console(monkeypatch):
+def legacy_console(monkeypatch: pytest.MonkeyPatch) -> InstallConsole:
     """Call inside the test: pytest re-installs its own sys.stdout between setup and call."""
 
     def install() -> Callable[[], bytes]:
@@ -43,7 +46,7 @@ def _install(monkeypatch: pytest.MonkeyPatch) -> Callable[[], bytes]:
     return written
 
 
-def test_log_line_with_unencodable_text_does_not_fail(legacy_console):
+def test_log_line_with_unencodable_text_does_not_fail(legacy_console: InstallConsole) -> None:
     written = legacy_console()
     root = logging.getLogger()
     saved_handlers, saved_level = root.handlers[:], root.level
@@ -58,15 +61,17 @@ def test_log_line_with_unencodable_text_does_not_fail(legacy_console):
     assert "\\U0001f680" in line  # emoji escaped instead of raising
 
 
-def test_json_formatter_keeps_cyrillic_and_extras():
+def test_json_formatter_keeps_cyrillic_and_extras() -> None:
     record = logging.LogRecord("t", logging.INFO, __file__, 1, "Кампания", None, None)
-    record.call_id = "call_0001"
+    record.call_id = "call_0001"  # what logging's extra= does
     payload = json.loads(JsonFormatter().format(record))
     assert payload["msg"] == "Кампания"
     assert payload["call_id"] == "call_0001"
 
 
-def test_producer_reports_unreachable_broker_on_legacy_console(legacy_console, monkeypatch):
+def test_producer_reports_unreachable_broker_on_legacy_console(
+    legacy_console: InstallConsole, monkeypatch: pytest.MonkeyPatch
+) -> None:
     written = legacy_console()
     monkeypatch.setenv("RABBITMQ_URL", "amqp://guest:guest@127.0.0.1:1/")
     assert producer.main() == 1

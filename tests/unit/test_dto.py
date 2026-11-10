@@ -5,12 +5,12 @@ from datetime import datetime, timezone
 import pytest
 from pydantic import ValidationError
 
-from app.models import Call
-from app.schemas import CallMessage, CallOut, CampaignNotFoundResponse
+from app.dto import CallMessage, CallOut, CampaignCallsResponse, CampaignNotFoundResponse
+from app.models import Call, CallPage, PageParams
 from tests.factories import message
 
 
-def test_valid_message_maps_to_entities():
+def test_valid_message_maps_to_entities() -> None:
     msg = CallMessage.model_validate(message())
     assert msg.to_call() == Call(
         call_id="call_0001",
@@ -24,17 +24,17 @@ def test_valid_message_maps_to_entities():
     assert campaign.created_at == datetime(2026, 10, 20, 10, 0, tzinfo=timezone.utc)
 
 
-def test_campaign_created_at_defaults_to_call_time():
+def test_campaign_created_at_defaults_to_call_time() -> None:
     msg = CallMessage.model_validate(message(campaign_created_at=...))
     assert msg.to_campaign().created_at == msg.created_at
 
 
-def test_datetimes_normalised_to_utc_millis():
+def test_datetimes_normalised_to_utc_millis() -> None:
     msg = CallMessage.model_validate(message(created_at="2026-10-20T15:06:00.123456+05:00"))
     assert msg.created_at == datetime(2026, 10, 20, 10, 6, 0, 123000, tzinfo=timezone.utc)
 
 
-def test_unknown_fields_ignored():
+def test_unknown_fields_ignored() -> None:
     msg = CallMessage.model_validate(message(duration_sec=42))
     assert not hasattr(msg, "duration_sec")
 
@@ -62,7 +62,7 @@ def test_unknown_fields_ignored():
         ("campaign_name", ...),
     ],
 )
-def test_invalid_message_rejected(field, value):
+def test_invalid_message_rejected(field: str, value: object) -> None:
     with pytest.raises(ValidationError):
         CallMessage.model_validate(message(**{field: value}))
 
@@ -74,10 +74,19 @@ def test_invalid_message_rejected(field, value):
         (datetime(2026, 10, 20, 10, 6, 0, 120000, tzinfo=timezone.utc), "2026-10-20T10:06:00.120Z"),
     ],
 )
-def test_call_out_serialises_iso_z(created_at, expected):
+def test_call_out_serialises_iso_z(created_at: datetime, expected: str) -> None:
     call = Call("call_0001", "camp_001", "79001234567", "success", created_at)
     assert CallOut.from_call(call).model_dump(mode="json")["created_at"] == expected
 
 
-def test_not_found_text():
+def test_campaign_calls_response_from_page() -> None:
+    call = Call("call_0001", "camp_001", "79001234567", "success", datetime.now(timezone.utc))
+    response = CampaignCallsResponse.from_page(
+        "camp_001", CallPage(calls=[call], total=7), PageParams(limit=1, offset=3)
+    )
+    assert (response.total, response.limit, response.offset) == (7, 1, 3)
+    assert [c.call_id for c in response.calls] == ["call_0001"]
+
+
+def test_not_found_text() -> None:
     assert CampaignNotFoundResponse().model_dump() == {"detail": "Кампания не найдена"}

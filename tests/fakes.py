@@ -1,9 +1,10 @@
-"""In-memory test doubles for the storage protocols in ``app.repository``."""
+"""In-memory test doubles for the storage protocols in ``app.repositories.protocols``."""
 
 from __future__ import annotations
 
-from app.models import Call, Campaign
-from app.repository import CallPage, InsertCallResult
+from dataclasses import dataclass, field
+
+from app.models import Call, CallPage, Campaign, InsertCallResult
 
 
 class InMemoryCampaignStore:
@@ -17,6 +18,8 @@ class InMemoryCampaignStore:
         return self.items.setdefault(campaign.campaign_id, campaign)
 
     async def get(self, campaign_id: str) -> Campaign | None:
+        if self.fail_with is not None:
+            raise self.fail_with
         return self.items.get(campaign_id)
 
 
@@ -39,3 +42,9 @@ class InMemoryCallStore:
             key=lambda c: (c.created_at, c.call_id),
         )
         return CallPage(calls=calls[offset : offset + limit], total=len(calls))
+
+
+@dataclass
+class InMemoryStores:
+    campaigns: InMemoryCampaignStore = field(default_factory=InMemoryCampaignStore)
+    calls: InMemoryCallStore = field(default_factory=InMemoryCallStore)

@@ -145,7 +145,11 @@ Exchange `calls` (direct), routing key `call.result`, очередь `calls.resu
 
 ## Конфигурация
 
-Переменные окружения (см. `app/config.py`):
+Все настройки с описанием и значениями по умолчанию: [`.env.example`](.env.example).
+Чтобы поменять их, скопируйте файл в `.env` (`cp .env.example .env`, в PowerShell
+`Copy-Item .env.example .env`). Приложение читает `.env` при запуске на хосте, docker
+compose подхватывает его для контейнера `app`; адреса MongoDB и RabbitMQ в compose
+всегда указывают на контейнеры. Переменные окружения (см. `app/config.py`):
 
 | переменная | по умолчанию |
 |---|---|
@@ -212,7 +216,7 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --wait mong
 
 ## Как проверялось
 
-- `ruff`, `mypy --strict` и 80 тестов - зелёные на Python 3.10, 3.12 и 3.13,
+- `ruff`, `mypy --strict` (включая тесты) и 93 теста - зелёные на Python 3.10, 3.12 и 3.13,
   против настоящих MongoDB (7.0 в CI, 8.3 локально) и RabbitMQ (4.1 в CI, 3.12
   локально);
 - сценарий проверяющего: приложение запущено командой из `Dockerfile`

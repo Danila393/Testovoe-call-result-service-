@@ -6,7 +6,7 @@ from pymongo import ASCENDING, AsyncMongoClient, IndexModel
 from pymongo.asynchronous.database import AsyncDatabase
 
 from app.config import Settings
-from app.repository import CALLS, CAMPAIGNS, Document
+from app.repositories.mongo import CALLS, CAMPAIGNS, Document
 
 
 def create_client(settings: Settings) -> AsyncMongoClient[Document]:

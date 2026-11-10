@@ -1,18 +1,18 @@
 from __future__ import annotations
 
 import producer
-from app import messaging
-from app.schemas import CallMessage
+from app.dto import CallMessage
+from app.infrastructure import rabbitmq
 
 
-def test_producer_topology_matches_app():
-    assert producer.EXCHANGE == messaging.EXCHANGE
-    assert producer.ROUTING_KEY == messaging.ROUTING_KEY
-    assert producer.QUEUE == messaging.QUEUE
-    assert producer.QUEUE_ARGUMENTS == messaging.QUEUE_ARGUMENTS
+def test_producer_topology_matches_app() -> None:
+    assert producer.EXCHANGE == rabbitmq.EXCHANGE
+    assert producer.ROUTING_KEY == rabbitmq.ROUTING_KEY
+    assert producer.QUEUE == rabbitmq.QUEUE
+    assert producer.QUEUE_ARGUMENTS == rabbitmq.QUEUE_ARGUMENTS
 
 
-def test_producer_messages_are_valid_and_cover_two_campaigns():
+def test_producer_messages_are_valid_and_cover_two_campaigns() -> None:
     parsed = [CallMessage.model_validate(m) for m in producer.MESSAGES]
     assert len(parsed) == 4
     per_campaign: dict[str, int] = {}
