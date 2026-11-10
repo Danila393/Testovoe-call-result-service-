@@ -61,7 +61,8 @@ class IngestCallHandler:
 
         campaign = parsed.to_campaign()
         stored_campaign = await self._campaigns.ensure(campaign)
-        if stored_campaign.name != campaign.name:
+        # Compare only a name the message actually carried; a missing one is not a conflict.
+        if parsed.campaign_name is not None and stored_campaign.name != parsed.campaign_name:
             logger.warning(
                 "campaign name differs from stored one; keeping stored",
                 extra={

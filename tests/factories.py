@@ -18,5 +18,18 @@ def message(**overrides: object) -> dict[str, object]:
     return {k: v for k, v in body.items() if v is not ...}
 
 
+def task_format_message(**overrides: object) -> dict[str, object]:
+    """Exactly the five call fields from the task, nothing else."""
+    body: dict[str, object] = {
+        "call_id": "call_0101",
+        "campaign_id": "camp_003",
+        "phone": "79001234567",
+        "status": "success",
+        "created_at": "2026-10-20T10:06:00Z",
+    }
+    body.update(overrides)
+    return body
+
+
 def message_bytes(**overrides: object) -> bytes:
     return json.dumps(message(**overrides), ensure_ascii=False).encode()

@@ -13,7 +13,8 @@ class CallMessage(BaseModel):
 
     call_id: EntityId
     campaign_id: EntityId
-    campaign_name: CampaignName
+    # Not part of the call format in the task: optional, defaults to campaign_id.
+    campaign_name: CampaignName | None = None
     campaign_created_at: UtcDatetime | None = None
     phone: Phone
     status: CallStatus
@@ -22,7 +23,7 @@ class CallMessage(BaseModel):
     def to_campaign(self) -> Campaign:
         return Campaign(
             campaign_id=self.campaign_id,
-            name=self.campaign_name,
+            name=self.campaign_name or self.campaign_id,
             created_at=self.campaign_created_at or self.created_at,
         )
 

@@ -7,9 +7,8 @@ from typing import Annotated
 from fastapi import Depends, Path, Query, Request
 
 from app.container import Container
-from app.dto.fields import ID_PATTERN
 from app.models import PageParams
-from app.models.pagination import DEFAULT_LIMIT, MAX_LIMIT
+from app.models.pagination import DEFAULT_LIMIT, MAX_LIMIT, MAX_OFFSET
 from app.services.readers import CampaignCallsReader, HealthReader
 
 
@@ -29,15 +28,22 @@ def get_health_reader(container: ContainerDep) -> HealthReader:
     return container.health_reader
 
 
+# Only a length bound: any other id cannot exist (messages pass ID_PATTERN), so the
+# reader answers "Кампания не найдена" with 200, as the task requires, instead of 422.
+MAX_CAMPAIGN_ID_LENGTH = 256
+
+
 def get_campaign_id(
-    campaign_id: Annotated[str, Path(pattern=ID_PATTERN, examples=["camp_001"])],
+    campaign_id: Annotated[
+        str, Path(min_length=1, max_length=MAX_CAMPAIGN_ID_LENGTH, examples=["camp_001"])
+    ],
 ) -> str:
     return campaign_id
 
 
 def get_page_params(
     limit: Annotated[int, Query(ge=1, le=MAX_LIMIT)] = DEFAULT_LIMIT,
-    offset: Annotated[int, Query(ge=0)] = 0,
+    offset: Annotated[int, Query(ge=0, le=MAX_OFFSET)] = 0,
 ) -> PageParams:
     return PageParams(limit=limit, offset=offset)
 

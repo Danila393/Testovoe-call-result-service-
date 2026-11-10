@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 
 import pytest
@@ -8,7 +9,7 @@ from app.enums import IngestOutcome
 from app.exceptions import StorageUnavailableError
 from app.models import IngestCallCommand
 from app.services.commands import IngestCallHandler
-from tests.factories import message_bytes
+from tests.factories import message_bytes, task_format_message
 from tests.fakes import InMemoryStores
 
 
@@ -77,6 +78,27 @@ async def test_campaign_name_change_keeps_first(
     assert result.outcome is IngestOutcome.STORED
     assert stores.campaigns.items["camp_001"].name == "Напоминание о платеже"
     assert "campaign name differs" in caplog.text
+
+
+async def test_task_format_message_is_stored(
+    handler: IngestCallHandler, stores: InMemoryStores
+) -> None:
+    result = await handler.handle(cmd(json.dumps(task_format_message()).encode()))
+    assert result.outcome is IngestOutcome.STORED
+    assert stores.calls.items["call_0101"].campaign_id == "camp_003"
+    assert stores.campaigns.items["camp_003"].name == "camp_003"
+
+
+async def test_message_without_name_is_not_a_name_conflict(
+    handler: IngestCallHandler, stores: InMemoryStores, caplog: pytest.LogCaptureFixture
+) -> None:
+    await handler.handle(cmd(message_bytes()))
+    without_name = task_format_message(call_id="call_0002", campaign_id="camp_001")
+    with caplog.at_level(logging.WARNING):
+        result = await handler.handle(cmd(json.dumps(without_name).encode()))
+    assert result.outcome is IngestOutcome.STORED
+    assert stores.campaigns.items["camp_001"].name == "Напоминание о платеже"
+    assert "campaign name differs" not in caplog.text
 
 
 @pytest.mark.parametrize(

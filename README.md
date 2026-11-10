@@ -108,11 +108,12 @@ make smoke            # Linux/macOS
 
 | метод и путь | ответ |
 |---|---|
-| `GET /campaigns/{campaign_id}/calls?limit=100&offset=0` | `200` `CampaignCallsResponse` или `200` `CampaignNotFoundResponse`; `422` при некорректных параметрах |
+| `GET /campaigns/{campaign_id}/calls?limit=100&offset=0` | `200` `CampaignCallsResponse` или `200` `CampaignNotFoundResponse` (для любого неизвестного `campaign_id`); `422` при некорректных параметрах; `503`, если MongoDB недоступна |
 | `GET /health` | `200`/`503` `HealthResponse` - MongoDB и консьюмер |
 | `GET /docs`, `GET /openapi.json` | Swagger UI и схема |
 
-Звонки отсортированы по `created_at`, затем `call_id`. `limit` - 1…1000.
+Звонки отсортированы по `created_at`, затем `call_id`. `limit` - 1…1000,
+`offset` - 0…1 000 000, `campaign_id` - до 256 символов.
 
 ## Формат сообщения
 
@@ -131,8 +132,25 @@ Exchange `calls` (direct), routing key `call.result`, очередь `calls.resu
 }
 ```
 
-`campaign_created_at` необязательно (по умолчанию - время первого звонка кампании).
-Даты обязаны содержать часовой пояс. Правила валидации - ADR-009.
+Обязательны только пять полей звонка из задания; сообщение ровно в таком формате
+тоже принимается:
+
+```json
+{"call_id": "call_0101", "campaign_id": "camp_003", "phone": "79001234567",
+ "status": "success", "created_at": "2026-10-20T10:06:00Z"}
+```
+
+| поле | правило |
+|---|---|
+| `call_id`, `campaign_id` | латиница, цифры, `_ . : -`, до 64 символов |
+| `phone` | только цифры, 10-15 знаков, без `+`, пробелов и дефисов: `79001234567`. `+7 900 123-45-67` уходит в `calls.results.dead` |
+| `status` | `[a-z][a-z0-9_]*`, до 32 символов: `success`, `no_answer`, `busy` |
+| `created_at`, `campaign_created_at` | ISO 8601 с часовым поясом: `2026-10-20T10:06:00Z` |
+| `campaign_name` | необязательно; по умолчанию название кампании равно `campaign_id` |
+| `campaign_created_at` | необязательно; по умолчанию время первого звонка кампании |
+
+Название и дата создания кампании берутся из первого сообщения по ней. Неизвестные
+поля игнорируются. Подробнее: ADR-008 и ADR-009 в `docs/DECISIONS.md`.
 
 Что происходит с сообщением:
 
@@ -216,7 +234,7 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --wait mong
 
 ## Как проверялось
 
-- `ruff`, `mypy --strict` (включая тесты) и 93 теста - зелёные на Python 3.10, 3.12 и 3.13,
+- `ruff`, `mypy --strict` (включая тесты) и 104 теста - зелёные на Python 3.10, 3.12 и 3.13,
   против настоящих MongoDB (7.0 в CI, 8.3 локально) и RabbitMQ (4.1 в CI, 3.12
   локально);
 - сценарий проверяющего: приложение запущено командой из `Dockerfile`

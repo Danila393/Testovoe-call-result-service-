@@ -23,7 +23,7 @@ try:
 except ImportError:  # pragma: no cover - guidance for running on a bare host
     sys.exit("aio-pika is not installed. Run: pip install -r requirements-producer.txt")
 
-# Must match app/messaging.py (checked by tests/unit/test_topology.py).
+# Must match app/infrastructure/rabbitmq.py (checked by tests/unit/test_topology.py).
 EXCHANGE: Final = "calls"
 ROUTING_KEY: Final = "call.result"
 QUEUE: Final = "calls.results"

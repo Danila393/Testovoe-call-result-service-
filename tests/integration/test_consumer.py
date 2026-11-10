@@ -21,7 +21,7 @@ from app.models import IngestCallCommand, IngestResult
 from app.repositories import MongoCallStore, MongoCampaignStore
 from app.repositories.mongo import CALLS, CAMPAIGNS, Document
 from app.services.commands import IngestCallHandler
-from tests.factories import message
+from tests.factories import message, task_format_message
 from tests.fakes import InMemoryCallStore, InMemoryCampaignStore
 
 Channel = aio_pika.abc.AbstractChannel
@@ -106,6 +106,25 @@ async def test_producer_messages_end_up_in_mongo(
     await producer.publish(settings.rabbitmq_url, producer.MESSAGES)
     await wait_until(lambda: _is_zero(broker, QUEUE))
     assert await mongo_db[CALLS].count_documents({}) == 4
+
+
+async def test_task_format_message_is_stored_in_mongo(
+    settings: Settings,
+    broker: Channel,
+    mongo_db: AsyncDatabase[Document],
+    running: StartConsumer,
+) -> None:
+    running(IngestCallHandler(MongoCampaignStore(mongo_db), MongoCallStore(mongo_db)))
+    await publish_raw(settings, json.dumps(task_format_message()).encode())
+
+    async def stored() -> bool:
+        return bool(await mongo_db[CALLS].count_documents({"call_id": "call_0101"}) == 1)
+
+    await wait_until(stored)
+    campaign = await mongo_db[CAMPAIGNS].find_one({"campaign_id": "camp_003"})
+    assert campaign is not None
+    assert campaign["name"] == "camp_003"
+    assert await queue_depth(broker, DEAD_LETTER_QUEUE) == 0
 
 
 async def _is_zero(channel: Channel, name: str) -> bool:

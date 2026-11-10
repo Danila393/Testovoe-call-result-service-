@@ -114,12 +114,31 @@ async def test_storage_outage_returns_503(
 
 
 @pytest.mark.parametrize(
+    "campaign_id",
+    ["camp%20001", "%D0%BA%D0%B0%D0%BC%D0%BF%D0%B0%D0%BD%D0%B8%D1%8F", "CAMP_001", "a" * 256],
+)
+async def test_any_unknown_campaign_id_returns_200_not_found(
+    client: httpx.AsyncClient, campaign_id: str
+) -> None:
+    resp = await client.get(f"/campaigns/{campaign_id}/calls")
+    assert resp.status_code == 200
+    assert resp.json() == {"detail": "Кампания не найдена"}
+
+
+async def test_max_offset_is_accepted(client: httpx.AsyncClient) -> None:
+    body = (await client.get("/campaigns/camp_001/calls?offset=1000000")).json()
+    assert (body["total"], body["offset"], body["calls"]) == (3, 1_000_000, [])
+
+
+@pytest.mark.parametrize(
     "url",
     [
-        "/campaigns/bad%20id/calls",
+        "/campaigns/" + "a" * 257 + "/calls",
         "/campaigns/camp_001/calls?limit=0",
         "/campaigns/camp_001/calls?limit=1001",
         "/campaigns/camp_001/calls?offset=-1",
+        "/campaigns/camp_001/calls?offset=1000001",
+        "/campaigns/camp_001/calls?offset=10000000000000000000",
     ],
 )
 async def test_invalid_params_422(client: httpx.AsyncClient, url: str) -> None:

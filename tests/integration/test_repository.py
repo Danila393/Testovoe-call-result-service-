@@ -75,5 +75,7 @@ async def test_list_filters_sorts_and_paginates(mongo_db: AsyncDatabase[Document
     assert second.total == 3
     beyond = await store.page_by_campaign("camp_001", limit=10, offset=50)
     assert (beyond.calls, beyond.total) == ([], 3)
+    far = await store.page_by_campaign("camp_001", limit=1000, offset=1_000_000)
+    assert (far.calls, far.total) == ([], 3)
     empty = await store.page_by_campaign("camp_404", limit=10, offset=0)
     assert (empty.calls, empty.total) == ([], 0)

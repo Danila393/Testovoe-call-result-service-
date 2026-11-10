@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 from app.dto import CallMessage, CallOut, CampaignCallsResponse, CampaignNotFoundResponse
 from app.models import Call, CallPage, PageParams
-from tests.factories import message
+from tests.factories import message, task_format_message
 
 
 def test_valid_message_maps_to_entities() -> None:
@@ -22,6 +22,14 @@ def test_valid_message_maps_to_entities() -> None:
     campaign = msg.to_campaign()
     assert campaign.name == "Напоминание о платеже"
     assert campaign.created_at == datetime(2026, 10, 20, 10, 0, tzinfo=timezone.utc)
+
+
+def test_task_format_message_is_valid_and_campaign_named_by_id() -> None:
+    msg = CallMessage.model_validate(task_format_message())
+    campaign = msg.to_campaign()
+    assert campaign.campaign_id == "camp_003"
+    assert campaign.name == "camp_003"
+    assert campaign.created_at == msg.created_at
 
 
 def test_campaign_created_at_defaults_to_call_time() -> None:
@@ -59,7 +67,7 @@ def test_unknown_fields_ignored() -> None:
         ("campaign_created_at", "2026-10-20"),
         ("call_id", ...),
         ("created_at", ...),
-        ("campaign_name", ...),
+        ("phone", "+7 900 123-45-67"),
     ],
 )
 def test_invalid_message_rejected(field: str, value: object) -> None:
