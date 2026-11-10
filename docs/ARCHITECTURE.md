@@ -36,18 +36,21 @@ flowchart LR
 app/
   main.py          create_app(), lifespan: Mongo → индексы → консьюмер → API
   config.py        Settings (pydantic-settings, переменные окружения)
-  logging.py       настройка логирования (JSON-строки в stdout)
+  log.py           настройка логирования (JSON-строки в stdout)
+  models.py        доменные сущности Campaign, Call (frozen dataclasses)
   messaging.py     топология RabbitMQ (имена, аргументы очередей) - единый источник
   schemas.py       Pydantic-модели: входящее сообщение, ответы API
-  repository.py    CampaignRepository / CallRepository поверх pymongo async
+  repository.py    протоколы CampaignStore / CallStore и их MongoDB-реализации;
+                   перевод временных ошибок PyMongo в StorageUnavailableError
   db.py            создание клиента MongoDB и индексов
   service.py       CallIngestService: бизнес-логика обработки одного сообщения
   consumer.py      CallConsumer: подключение, переподключение, ack/reject/nack
   api.py           HTTP-роуты
 producer.py        отдельный скрипт-продюсер (самодостаточный, без импорта app)
 tests/
-  unit/            без внешних сервисов
+  unit/            без внешних сервисов (in-memory двойники хранилища)
   integration/     реальные MongoDB и RabbitMQ (адреса из переменных окружения)
+  e2e/             приложение целиком (lifespan) + producer.py - сценарий проверки
 ```
 
 Зависимости направлены строго внутрь: `api`/`consumer` → `service` → `repository` →
