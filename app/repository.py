@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 import contextlib
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 from pymongo import ASCENDING
 from pymongo.asynchronous.collection import AsyncCollection
 from pymongo.asynchronous.database import AsyncDatabase
-from pymongo.errors import DuplicateKeyError
+from pymongo.errors import (
+    ConnectionFailure,
+    DuplicateKeyError,
+    ExecutionTimeout,
+    PyMongoError,
+    WTimeoutError,
+)
 
 from app.models import Call, Campaign
 
@@ -17,6 +24,28 @@ CAMPAIGNS = "campaigns"
 CALLS = "calls"
 
 Document = dict[str, Any]
+
+
+class StorageUnavailableError(Exception):
+    """The database is temporarily unreachable; the same operation may succeed later."""
+
+
+def _is_transient(exc: PyMongoError) -> bool:
+    return isinstance(exc, (ConnectionFailure, ExecutionTimeout, WTimeoutError)) or (
+        exc.has_error_label("RetryableWriteError")
+    )
+
+
+@contextlib.asynccontextmanager
+async def _translate_errors() -> AsyncIterator[None]:
+    try:
+        yield
+    except DuplicateKeyError:
+        raise
+    except PyMongoError as exc:
+        if _is_transient(exc):
+            raise StorageUnavailableError(str(exc)) from exc
+        raise
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +60,8 @@ class InsertCallResult:
 
 
 class CampaignStore(Protocol):
+    """Implementations raise ``StorageUnavailableError`` for transient failures."""
+
     async def ensure(self, campaign: Campaign) -> Campaign:
         """Create the campaign if absent. Returns the stored campaign (first write wins)."""
 
@@ -38,6 +69,8 @@ class CampaignStore(Protocol):
 
 
 class CallStore(Protocol):
+    """Implementations raise ``StorageUnavailableError`` for transient failures."""
+
     async def insert(self, call: Call) -> InsertCallResult: ...
 
     async def list_by_campaign(
@@ -77,21 +110,23 @@ class MongoCampaignStore:
         self._col: AsyncCollection[Document] = db[CAMPAIGNS]
 
     async def ensure(self, campaign: Campaign) -> Campaign:
-        # DuplicateKeyError: a concurrent upsert created it between our match and insert,
-        # which is exactly the outcome we want.
-        with contextlib.suppress(DuplicateKeyError):
-            await self._col.update_one(
-                {"campaign_id": campaign.campaign_id},
-                {"$setOnInsert": {"name": campaign.name, "created_at": campaign.created_at}},
-                upsert=True,
-            )
+        async with _translate_errors():
+            # DuplicateKeyError: a concurrent upsert created it between our match and insert,
+            # which is exactly the outcome we want.
+            with contextlib.suppress(DuplicateKeyError):
+                await self._col.update_one(
+                    {"campaign_id": campaign.campaign_id},
+                    {"$setOnInsert": {"name": campaign.name, "created_at": campaign.created_at}},
+                    upsert=True,
+                )
         stored = await self.get(campaign.campaign_id)
         if stored is None:  # pragma: no cover - would mean the document vanished right after upsert
             raise RuntimeError(f"campaign {campaign.campaign_id!r} missing after upsert")
         return stored
 
     async def get(self, campaign_id: str) -> Campaign | None:
-        doc = await self._col.find_one({"campaign_id": campaign_id}, _CAMPAIGN_PROJECTION)
+        async with _translate_errors():
+            doc = await self._col.find_one({"campaign_id": campaign_id}, _CAMPAIGN_PROJECTION)
         return _campaign_from_doc(doc) if doc is not None else None
 
 
@@ -100,21 +135,21 @@ class MongoCallStore:
         self._col: AsyncCollection[Document] = db[CALLS]
 
     async def insert(self, call: Call) -> InsertCallResult:
-        try:
-            await self._col.insert_one(
-                {
-                    "call_id": call.call_id,
-                    "campaign_id": call.campaign_id,
-                    "phone": call.phone,
-                    "status": call.status,
-                    "created_at": call.created_at,
-                }
-            )
-        except DuplicateKeyError:
-            doc = await self._col.find_one({"call_id": call.call_id}, _CALL_PROJECTION)
-            if doc is None:  # pragma: no cover - unique index violated by a doc that is gone
-                raise
-            return InsertCallResult(inserted=False, existing=_call_from_doc(doc))
+        document = {
+            "call_id": call.call_id,
+            "campaign_id": call.campaign_id,
+            "phone": call.phone,
+            "status": call.status,
+            "created_at": call.created_at,
+        }
+        async with _translate_errors():
+            try:
+                await self._col.insert_one(document)
+            except DuplicateKeyError:
+                doc = await self._col.find_one({"call_id": call.call_id}, _CALL_PROJECTION)
+                if doc is None:  # pragma: no cover - unique index hit by a doc that is now gone
+                    raise
+                return InsertCallResult(inserted=False, existing=_call_from_doc(doc))
         return InsertCallResult(inserted=True)
 
     async def list_by_campaign(self, campaign_id: str, *, limit: int, offset: int) -> list[Call]:
@@ -124,7 +159,9 @@ class MongoCallStore:
             .skip(offset)
             .limit(limit)
         )
-        return [_call_from_doc(doc) async for doc in cursor]
+        async with _translate_errors():
+            return [_call_from_doc(doc) async for doc in cursor]
 
     async def count_by_campaign(self, campaign_id: str) -> int:
-        return await self._col.count_documents({"campaign_id": campaign_id})
+        async with _translate_errors():
+            return await self._col.count_documents({"campaign_id": campaign_id})

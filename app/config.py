@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     rabbitmq_url: str = "amqp://guest:guest@localhost:5672/"
     prefetch_count: int = Field(default=10, ge=1, le=1000)
     retry_delay_seconds: float = Field(default=1.0, ge=0)
+    storage_retry_max_delay_seconds: float = Field(default=30.0, gt=0)
     reconnect_initial_delay_seconds: float = Field(default=1.0, gt=0)
     reconnect_max_delay_seconds: float = Field(default=30.0, gt=0)
 

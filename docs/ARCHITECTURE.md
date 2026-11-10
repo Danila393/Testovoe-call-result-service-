@@ -141,14 +141,17 @@ stateDiagram-v2
     Received --> Rejected: тело не JSON / не прошло валидацию
     Received --> Validated
     Validated --> CampaignEnsured: upsert campaigns ($setOnInsert)
-    Validated --> RetryPending: ошибка MongoDB
+    Validated --> StorageWait: MongoDB недоступна
     CampaignEnsured --> Stored: insert calls
     CampaignEnsured --> Duplicate: call_id уже есть, данные совпадают
     CampaignEnsured --> Rejected: call_id уже есть, данные отличаются
-    CampaignEnsured --> RetryPending: ошибка MongoDB
+    CampaignEnsured --> StorageWait: MongoDB недоступна
+    StorageWait --> Validated: пауза (backoff ≤ 30 c), повтор без возврата в очередь
+    Validated --> Failed: непредвиденное исключение
+    CampaignEnsured --> Failed: непредвиденное исключение
     Stored --> Acked
     Duplicate --> Acked
-    RetryPending --> Requeued: пауза (backoff), nack(requeue=true)
+    Failed --> Requeued: пауза, nack(requeue=true)
     Requeued --> Received: повторная доставка
     Requeued --> DeadLettered: превышен x-delivery-limit
     Rejected --> DeadLettered: reject(requeue=false)
@@ -163,12 +166,17 @@ stateDiagram-v2
 2. Невалидные сообщения логируются (`WARNING`, с причиной и обрезанным телом) и
    отклоняются без возврата в очередь - RabbitMQ переносит их в
    `calls.results.dead`. Консьюмер продолжает работу.
-3. Ошибки инфраструктуры (MongoDB недоступна, таймаут) не считаются проблемой
-   сообщения: после паузы сообщение возвращается в очередь. Quorum queue считает
-   доставки; после `x-delivery-limit` сообщение уходит в DLQ, поэтому
-   бесконечного цикла «ядовитого» сообщения нет.
-4. Непредвиденное исключение в обработчике логируется с трассировкой и
-   обрабатывается как п. 3 - консьюмер не падает.
+3. Временная недоступность MongoDB (`ConnectionFailure`, таймауты, ошибки с
+   меткой `RetryableWriteError` → `StorageUnavailableError`) - проблема не
+   сообщения, а инфраструктуры. Консьюмер держит сообщение неподтверждённым и
+   повторяет обработку на месте с экспоненциальной паузой (до 30 с). Счётчик
+   доставок при этом не растёт, поэтому длительный простой БД не отправляет
+   исправные сообщения в DLQ. Новые сообщения в это время не забираются.
+4. Непредвиденное исключение (ошибка в коде, неожиданный ответ БД) логируется с
+   трассировкой, сообщение после паузы возвращается в очередь
+   (`nack(requeue=true)`). Quorum queue считает доставки; после
+   `x-delivery-limit` сообщение уходит в DLQ, поэтому «ядовитое» сообщение не
+   крутится бесконечно. Консьюмер не падает.
 
 ## 7. Жизненный цикл консьюмера
 
